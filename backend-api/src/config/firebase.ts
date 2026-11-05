@@ -4,8 +4,15 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Forzamos el tipo "as string" para que TypeScript no se queje de undefined
-const privateKey = (process.env.FIREBASE_PRIVATE_KEY as string)?.replace(/\\n/g, '\n');
+const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+if (!rawPrivateKey) {
+  throw new Error('FIREBASE_PRIVATE_KEY no está configurada');
+}
+
+const privateKey = rawPrivateKey
+  .replace(/^(['"])([\s\S]*)\1$/, '$2')
+  .replace(/\\n/g, '\n');
 
 if (!getApps().length) {
   initializeApp({
