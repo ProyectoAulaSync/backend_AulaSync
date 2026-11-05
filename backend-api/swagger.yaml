@@ -1,0 +1,20 @@
+openapi: 3.0.0
+info:
+  title: API AulaSync
+  version: 1.0.0
+  description: Documentación de los endpoints base para el Sprint 0
+paths:
+  /health:
+    get:
+      summary: Verifica el estado del servidor
+      responses:
+        '200':
+          description: Servidor en línea
+  /api/mensaje:
+    get:
+      summary: Obtiene el mensaje de prueba desde Firestore
+      responses:
+        '200':
+          description: Mensaje obtenido exitosamente
+        '500':
+          description: Error del servidor

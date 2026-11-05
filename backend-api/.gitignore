@@ -1,0 +1,18 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+
+# Firebase service-account files
+serviceAccountKey.json
+firebase-service-account*.json
+
+# Local/editor files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
