@@ -1,0 +1,20 @@
+{
+  "name": "backend-realtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Realtime service infrastructure skeleton",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  }
+}
