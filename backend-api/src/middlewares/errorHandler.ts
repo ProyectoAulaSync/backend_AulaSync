@@ -1,15 +1,41 @@
-import { Request, Response, NextFunction } from 'express';
+import type { ErrorRequestHandler } from 'express';
+import { ZodError } from 'zod';
 import { AppError } from '../errors/AppError';
 
-export const errorHandler = (err: unknown, _req: Request, res: Response, _next: NextFunction): void => {
-  console.error('[Error]:', err);
-  
-  const appError = err instanceof AppError ? err : new AppError('Error interno del servidor', 500);
+export const errorHandler: ErrorRequestHandler = (err, _req, res, _next): void => {
+  if (err instanceof ZodError) {
+    res.status(400).json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Revisa los datos ingresados',
+        fields: err.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+      },
+    });
+    return;
+  }
 
-  // Respuesta JSON genérica sin exponer la traza al cliente
-  res.status(appError.statusCode).json({
-    status: 'error',
-    statusCode: appError.statusCode,
-    message: appError.message
+  if (err instanceof AppError) {
+    res.status(err.statusCode).json({
+      error: {
+        code: err.code ?? 'ERROR',
+        message: err.message,
+        ...(err.field ? { field: err.field } : {}),
+      },
+    });
+    return;
+  }
+
+  if (typeof err === 'object' && err !== null && (err as { type?: unknown }).type === 'entity.parse.failed') {
+    res.status(400).json({
+      error: { code: 'INVALID_JSON', message: 'El cuerpo de la petición no es un JSON válido' },
+    });
+    return;
+  }
+
+  console.error(err);
+  res.status(500).json({
+    error: { code: 'INTERNAL_ERROR', message: 'Ocurrió un error inesperado. Intenta de nuevo' },
   });
 };
+
+export default errorHandler;
