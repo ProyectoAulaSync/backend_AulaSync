@@ -18,3 +18,122 @@ paths:
           description: Mensaje obtenido exitosamente
         '500':
           description: Error del servidor
+  /api/auth/register:
+    post:
+      tags: [Autenticación]
+      summary: Registro manual (correo y contraseña)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombres, apellidos, username, avatar, email, password]
+              properties:
+                nombres: { type: string }
+                apellidos: { type: string }
+                username: { type: string, minLength: 3, maxLength: 20 }
+                avatar: { type: string }
+                email: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '201': { description: Usuario creado, content: { application/json: { schema: { $ref: '#/components/schemas/UserProfile' } } } }
+        '400': { description: Datos inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: Correo o username ya registrado, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/auth/google:
+    post:
+      tags: [Autenticación]
+      summary: Crea el perfil inicial de quien entra con Google (idempotente)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Perfil (profileComplete=false si falta username), content: { application/json: { schema: { $ref: '#/components/schemas/UserProfile' } } } }
+        '401': { description: Sin token o token inválido }
+        '403': { description: La cuenta no es de Google }
+  /api/auth/username:
+    put:
+      tags: [Autenticación]
+      summary: Elegir nombre de usuario (paso obligatorio tras Google)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+      responses:
+        '200': { description: Perfil completo, content: { application/json: { schema: { $ref: '#/components/schemas/UserProfile' } } } }
+        '400': { description: Formato inválido }
+        '401': { description: No autorizado }
+        '409': { description: Username ocupado o ya elegido }
+  /api/users/username-available:
+    get:
+      tags: [Usuarios]
+      summary: Consulta si un username está libre
+      parameters:
+        - { in: query, name: username, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { username: { type: string }, available: { type: boolean } } } } } }
+        '400': { description: Formato inválido }
+  /api/users/me:
+    get:
+      tags: [Usuarios]
+      summary: Perfil del usuario autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/UserProfile' } } } }
+        '401': { description: No autorizado }
+        '404': { description: Perfil no creado aún }
+    patch:
+      tags: [Usuarios]
+      summary: Editar nombres, apellidos o avatar
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nombres: { type: string }
+                apellidos: { type: string }
+                avatar: { type: string }
+      responses:
+        '200': { description: Perfil actualizado }
+        '401': { description: No autorizado }
+        '403': { description: Perfil incompleto (falta username) }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID Token
+  schemas:
+    UserProfile:
+      type: object
+      properties:
+        uid: { type: string }
+        email: { type: string }
+        nombres: { type: string }
+        apellidos: { type: string }
+        username: { type: string, nullable: true }
+        avatar: { type: string, nullable: true }
+        provider: { type: string, enum: [password, google] }
+        profileComplete: { type: boolean }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            field: { type: string }
+            fields:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
