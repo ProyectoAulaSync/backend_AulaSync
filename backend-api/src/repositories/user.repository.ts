@@ -11,6 +11,8 @@ export interface ProfileChanges {
   nombres?: string | undefined;
   apellidos?: string | undefined;
   avatar?: string | undefined;
+  username?: string | undefined;
+  email?: string | undefined;
 }
 
 function toProfile(data: DocumentData): UserProfile {
@@ -102,17 +104,45 @@ export function setUsername(uid: string, username: string): Promise<UserProfile>
   });
 }
 
-/** Edita campos no únicos del perfil (el cambio de username llega en US-04, Sprint siguiente). */
+/** Edita campos del perfil incluyendo username (con validación de unicidad) y email. */
 export function updateProfile(uid: string, data: ProfileChanges): Promise<UserProfile> {
   return guard(async () => {
     const ref = db.collection(USERS).doc(uid);
     const snap = await ref.get();
     if (!snap.exists) throw profileNotFound();
 
+    const currentEmail = snap.data()?.email ?? '';
     const changes: Record<string, string> = {};
+
     if (data.nombres !== undefined) changes.nombres = data.nombres;
     if (data.apellidos !== undefined) changes.apellidos = data.apellidos;
     if (data.avatar !== undefined) changes.avatar = data.avatar;
+
+    // Actualizar username con validación de unicidad en servidor
+    if (data.username !== undefined && data.username !== snap.data()?.username) {
+      const lower = data.username.toLowerCase();
+      const nameRef = db.collection(USERNAMES).doc(lower);
+      const nameSnap = await nameRef.get();
+      if (nameSnap.exists) throw usernameTaken();
+      changes.username = data.username;
+      // También actualizamos el registro en usernames (eliminar viejo, crear nuevo)
+      const currentLower = snap.data()?.username?.toLowerCase() ?? '';
+      if (currentLower && currentLower !== lower) {
+        const oldNameRef = db.collection(USERNAMES).doc(currentLower);
+        await oldNameRef.delete();
+      }
+      await nameRef.set({ uid, createdAt: FieldValue.serverTimestamp() });
+    }
+
+    // Actualizar email con validación de disponibilidad (si cambió)
+    if (data.email !== undefined && data.email !== currentEmail) {
+      const emailQuery = await db.collection(USERS).where('email', '==', data.email).limit(1).get();
+      if (!emailQuery.empty) throw new AppError('Este correo ya está registrado. Inicia sesión con otro correo', 409, {
+        code: 'EMAIL_TAKEN',
+        field: 'email',
+      });
+      changes.email = data.email;
+    }
 
     await ref.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
     return toProfile({ ...(snap.data() as DocumentData), ...changes });

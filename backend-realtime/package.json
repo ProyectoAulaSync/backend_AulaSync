@@ -2,19 +2,25 @@
   "name": "backend-realtime",
   "version": "1.0.0",
   "private": true,
-  "description": "Realtime service infrastructure skeleton",
+  "description": "Servidor de tiempo real con Socket.IO para AulaSync",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
+    "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.0.0",
     "express": "^5.1.0",
+    "firebase-admin": "^13.0.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   }
 }
