@@ -194,39 +194,69 @@ export async function updateProfile(uid: string, data: ProfileChanges): Promise<
   });
 }
 
-/** Elimina el perfil del usuario: borra de Firestore, Firebase Auth y libera username.
- * Ejecutado solo por el dueño de la sesión (authenticate middleware).
- * Lanza 401 si no hay token, 404 si el perfil no existe.
- */
-export async function deleteProfile(uid: string): Promise<void> {
-  return guard(async () => {
-    // 1. Obtener perfil actual para liberar username
-    const userSnap = await db.collection(USERS).doc(uid).get();
-    if (!userSnap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
-      code: 'PROFILE_NOT_FOUND',
-    });
+/** Elimina el perfil del usuario: borra de Firestore, Firebase Auth y libera username,
+   * junto con datos asociados (mensajes propios, salas donde es anfitrión y memberships)
+   * para evitar datos huérfanos. Ejecutado solo por el dueño de la sesión (authenticate middleware).
+   * Lanza 401 si no hay token, 404 si el perfil no existe.
+   * Captura previa: se leen datos antes de borrar.
+   */
+ export async function deleteProfile(uid: string): Promise<void> {
+   return guard(async () => {
+     // --- PASO 1: Captura del username actual ---
+     const userSnap = await db.collection(USERS).doc(uid).get();
+     if (!userSnap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
+       code: 'PROFILE_NOT_FOUND',
+     });
+     const currentUsername = userSnap.data()?.username ?? '';
 
-    const currentUsername = userSnap.data()?.username ?? '';
+     // --- PASO 2: Borrar mensajes propios (collection group query) ---
+     await db.collectionGroup('messages').where('autorId', '==', uid).get().then((msgSnap) => {
+       const batch = db.batch();
+       msgSnap.docs.forEach((doc) => batch.delete(doc.ref));
+       if (msgSnap.docs.length > 0) batch.commit().catch(() => {});
+     }).catch(err => console.error('Error borrando mensajes propios:', err));
 
-    // 2. Ejecutar transacción atómica: Firestore + username
-    await db.runTransaction(async (tx) => {
-      // a) Borrar documento de usuario de Firestore
-      const userRef = db.collection(USERS).doc(uid);
-      await tx.delete(userRef);
+     // --- PASO 3: Borrar salas donde es anfitrión y limpiar datos asociados ---
+     const roomsQuery = await db.collection(USERS).doc(uid).collection('rooms').where('anfitriónId', '==', uid).get();
+     const hostRoomIds = roomsQuery.docs.map(d => d.id);
 
-      // b) Liberar username en usernames collection (si tenía uno)
-      if (currentUsername) {
-        const lower = currentUsername.toLowerCase();
-        const nameRef = db.collection(USERNAMES).doc(lower);
-        await tx.delete(nameRef);
-      }
-    });
+     hostRoomIds.forEach((roomId) => {
+       // Borrar mensajes propios en esta sala
+       const msgsRef = db.collection('rooms').doc(roomId).collection('messages');
+       const msgQuery = msgsRef.where('autorId', '==', uid);
+       msgQuery.get().then((msgDocs) => {
+         const batch = db.batch();
+         msgDocs.forEach((doc) => batch.delete(doc.ref));
+         batch.commit().catch(() => {});
+       }).catch(err => console.error('Error borrando mensajes de sala', roomId, err));
 
-    // 3. Borrar cuenta de Firebase Authentication (fuera de la transacción Firestore)
-    await auth.deleteUser(uid).catch((e) => {
-      console.error('Error al borrar usuario de Firebase Auth:', e);
-      // No lanzamos error aquí porque el perfil de Firestore ya se borró;
-      // el usuario quedó "desvinculado" pero la cuenta de Auth se eliminó.
-    });
-  });
-}
+       // Borrar membership del usuario en esta sala
+       const membersRef = db.collection('rooms').doc(roomId).collection('members').doc(uid);
+       const delMemberBatch = db.batch();
+       delMemberBatch.delete(membersRef);
+       delMemberBatch.commit().catch(() => {});
+
+       // Borrar la sala en sí (ya sin anfitrión)
+       const delRoomBatch = db.batch();
+       delRoomBatch.delete(db.collection('rooms').doc(roomId));
+       delRoomBatch.commit().catch(() => {});
+     });
+
+     // --- PASO 4: Transacción atómica: borrar usuario + liberar username ---
+     await db.runTransaction(async (tx) => {
+       const userRef = db.collection(USERS).doc(uid);
+       await tx.delete(userRef);
+
+       if (currentUsername) {
+         const lower = currentUsername.toLowerCase();
+         const nameRef = db.collection(USERNAMES).doc(lower);
+         await tx.delete(nameRef);
+       }
+     });
+
+     // --- PASO 5: Borrar cuenta de Firebase Authentication ---
+     await auth.deleteUser(uid).catch((e) => {
+       console.error('Error al borrar usuario de Firebase Auth:', e);
+     });
+   });
+ }
