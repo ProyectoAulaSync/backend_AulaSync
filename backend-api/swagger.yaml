@@ -110,9 +110,14 @@ paths:
     delete:
       tags: [Usuarios]
       summary: Eliminar cuenta de usuario
+      description: |
+        Borra la cuenta del usuario de forma completa: elimina el perfil de Firestore,
+        libera el username en la colección usernames, borra todos los mensajes propios,
+        y elimina las salas donde el usuario es anfitrión (con sus memberships y mensajes propios).
+        Ejecutado solo por el dueño de la sesión (token Bearer Firebase). Devuelve 204 en éxito.
       security: [{ bearerAuth: [] }]
       responses:
-        '204': { description: Cuenta eliminada exitosamente }
+        '204': { description: Cuenta eliminada exitosamente y datos asociados limpiados }
         '401': { description: No autorizado, sin token o token inválido }
         '404': { description: Perfil no encontrado }
   /api/rooms:
