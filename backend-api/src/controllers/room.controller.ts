@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { getAuthContext } from '../middlewares/authenticate';
 import * as roomService from '../services/room.service';
+import { AppError } from '../errors/AppError';
 import { roomCreateSchema, roomUpdateSchema } from '../schemas/room.schema';
 
 export const createRoom = async (req: Request, res: Response): Promise<void> => {
@@ -14,6 +15,13 @@ export const listMyRooms = async (_req: Request, res: Response): Promise<void> =
   const uid = getAuthContext(res).uid;
   const rooms = await roomService.listMyRoomsService(uid);
   res.json(rooms);
+};
+
+export const getRoomById = async (req: Request, res: Response): Promise<void> => {
+  const roomId = String(req.params.roomId);
+  const room = await roomService.findRoomById(roomId);
+  if (!room) throw new AppError('Sala no encontrada', 404, { code: 'ROOM_NOT_FOUND' });
+  res.json(room);
 };
 
 export const updateRoom = async (req: Request, res: Response): Promise<void> => {

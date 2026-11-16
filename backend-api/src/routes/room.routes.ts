@@ -6,6 +6,7 @@ import {
   deleteRoom,
   joinRoom,
   listMembers,
+  getRoomById,
 } from '../controllers/room.controller';
 import { authenticate, requireCompleteProfile } from '../middlewares/authenticate';
 
@@ -16,6 +17,7 @@ router.use(requireCompleteProfile);
 
 router.post('/', createRoom);
 router.get('/', listMyRooms);
+router.get('/:roomId', getRoomById);
 router.patch('/:roomId', updateRoom);
 router.delete('/:roomId', deleteRoom);
 router.post('/:roomId/join', joinRoom);
