@@ -20,3 +20,9 @@ export const patchMe = async (req: Request, res: Response): Promise<void> => {
   const data = updateProfileSchema.parse(req.body);
   res.json(await userRepo.updateProfile(getAuthContext(res).uid, data));
 };
+
+export const deleteMe = async (req: Request, res: Response): Promise<void> => {
+  const uid = getAuthContext(res).uid;
+  await userRepo.deleteProfile(uid);
+  res.status(204).send();
+};

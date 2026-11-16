@@ -107,6 +107,14 @@ paths:
         '400': { description: Datos de validación inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { description: No autorizado, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: Perfil incompleto (falta username), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    delete:
+      tags: [Usuarios]
+      summary: Eliminar cuenta de usuario
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Cuenta eliminada exitosamente }
+        '401': { description: No autorizado, sin token o token inválido }
+        '404': { description: Perfil no encontrado }
   /api/rooms:
     post:
       tags: [Salas]

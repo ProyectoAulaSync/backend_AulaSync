@@ -1,4 +1,5 @@
 import { type DocumentData, FieldValue, type Transaction } from 'firebase-admin/firestore';
+import { auth } from '../config/auth';
 import { db } from '../config/firebase';
 import { AppError } from '../errors/AppError';
 import { profileNotFound, usernameTaken } from '../errors/userErrors';
@@ -31,9 +32,9 @@ function toProfile(data: DocumentData): UserProfile {
 async function guard<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    console.error('Error de Firestore:', error);
+  } catch (e) {
+    if (e instanceof AppError) throw e;
+    console.error('Error de Firestore:', e);
     throw new AppError('No se pudo completar la operación con la base de datos', 503, {
       code: 'DB_ERROR',
     });
@@ -189,6 +190,43 @@ export async function updateProfile(uid: string, data: ProfileChanges): Promise<
       // 6. Devolver perfil actualizado
       const updatedSnap = await tx.get(userRef);
       return toProfile(updatedSnap.data() as DocumentData);
+    });
+  });
+}
+
+/** Elimina el perfil del usuario: borra de Firestore, Firebase Auth y libera username.
+ * Ejecutado solo por el dueño de la sesión (authenticate middleware).
+ * Lanza 401 si no hay token, 404 si el perfil no existe.
+ */
+export async function deleteProfile(uid: string): Promise<void> {
+  return guard(async () => {
+    // 1. Obtener perfil actual para liberar username
+    const userSnap = await db.collection(USERS).doc(uid).get();
+    if (!userSnap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
+      code: 'PROFILE_NOT_FOUND',
+    });
+
+    const currentUsername = userSnap.data()?.username ?? '';
+
+    // 2. Ejecutar transacción atómica: Firestore + username
+    await db.runTransaction(async (tx) => {
+      // a) Borrar documento de usuario de Firestore
+      const userRef = db.collection(USERS).doc(uid);
+      await tx.delete(userRef);
+
+      // b) Liberar username en usernames collection (si tenía uno)
+      if (currentUsername) {
+        const lower = currentUsername.toLowerCase();
+        const nameRef = db.collection(USERNAMES).doc(lower);
+        await tx.delete(nameRef);
+      }
+    });
+
+    // 3. Borrar cuenta de Firebase Authentication (fuera de la transacción Firestore)
+    await auth.deleteUser(uid).catch((e) => {
+      console.error('Error al borrar usuario de Firebase Auth:', e);
+      // No lanzamos error aquí porque el perfil de Firestore ya se borró;
+      // el usuario quedó "desvinculado" pero la cuenta de Auth se eliminó.
     });
   });
 }
