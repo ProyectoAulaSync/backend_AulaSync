@@ -110,6 +110,19 @@ io.on('connection', (socket: Socket) => {
     async (payload: { roomId: string; texto: string }, ack?: (payload: { ok: boolean; id?: string; error?: string }) => void) => {
       try {
         const { roomId, texto } = payload;
+
+        // Validación 1: mensaje no vacío
+        if (!texto || !texto.trim()) {
+          ack?.({ ok: false, error: 'El mensaje no puede estar vacío' });
+          return;
+        }
+
+        // Validación 2: usuario miembro de la sala
+        if (!socketsInRoom(roomId).includes(socket.id)) {
+          ack?.({ ok: false, error: 'No eres miembro de esta sala' });
+          return;
+        }
+
         const roomRef = db.collection('rooms').doc(roomId);
         const roomSnap = await roomRef.get();
         if (!roomSnap.exists) {
