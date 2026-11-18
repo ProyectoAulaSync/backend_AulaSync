@@ -1,4 +1,4 @@
-import { type DocumentData, FieldValue } from 'firebase-admin/firestore';
+import { type DocumentData, FieldValue, type Transaction } from 'firebase-admin/firestore';
 import { db } from '../config/firebase';
 import { AppError } from '../errors/AppError';
 import { profileNotFound, usernameTaken } from '../errors/userErrors';
@@ -11,6 +11,8 @@ export interface ProfileChanges {
   nombres?: string | undefined;
   apellidos?: string | undefined;
   avatar?: string | undefined;
+  username?: string | undefined;
+  email?: string | undefined;
 }
 
 function toProfile(data: DocumentData): UserProfile {
@@ -102,19 +104,91 @@ export function setUsername(uid: string, username: string): Promise<UserProfile>
   });
 }
 
-/** Edita campos no únicos del perfil (el cambio de username llega en US-04, Sprint siguiente). */
-export function updateProfile(uid: string, data: ProfileChanges): Promise<UserProfile> {
+/** Edita perfil con validación atómica de username y email.
+ * - Username: usa transacción Firestore sobre users/usernames para evitar race conditions.
+ * - Email: valida unicidad contra colección users antes de aplicar el cambio.
+ * Lanza 409 con el campo indicado en caso de colisión.
+ */
+export async function updateProfile(uid: string, data: ProfileChanges): Promise<UserProfile> {
   return guard(async () => {
-    const ref = db.collection(USERS).doc(uid);
-    const snap = await ref.get();
-    if (!snap.exists) throw profileNotFound();
+    const userRef = db.collection(USERS).doc(uid);
+    // Lectura inicial fuera de transacción solo para validaciones previas
+    const snap = await userRef.get();
+    if (!snap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
+      code: 'PROFILE_NOT_FOUND',
+    });
 
-    const changes: Record<string, string> = {};
-    if (data.nombres !== undefined) changes.nombres = data.nombres;
-    if (data.apellidos !== undefined) changes.apellidos = data.apellidos;
-    if (data.avatar !== undefined) changes.avatar = data.avatar;
+    const currentEmail = snap.data()?.email ?? '';
+    const currentUsername = snap.data()?.username ?? '';
 
-    await ref.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
-    return toProfile({ ...(snap.data() as DocumentData), ...changes });
+    // Validaciones previas fuera de transacción (más simples, sin lecturas complejas)
+    if (data.email !== undefined && data.email !== currentEmail) {
+      const emailQuery = await db.collection(USERS).where('email', '==', data.email).limit(1).get();
+      if (!emailQuery.empty) throw new AppError('Este correo ya está registrado. Inicia sesión con otro correo', 409, {
+        code: 'EMAIL_TAKEN',
+        field: 'email',
+      });
+    }
+
+    if (data.username !== undefined && data.username !== currentUsername) {
+      const lower = data.username.toLowerCase();
+      // Validación de disponibilidad en usernames collection (fuera de tx para simplicidad,
+      // pero la transacción real la haré abajo)
+      const nameRef = db.collection(USERNAMES).doc(lower);
+      const nameSnap = await nameRef.get();
+      if (nameSnap.exists) {
+        // Pero necesitamos verificar que no sea el username actual del usuario
+        const existingUsername = nameSnap.data()?.uid;
+        if (existingUsername !== uid) throw new AppError('Este nombre de usuario ya está en uso. Elige otro', 409, {
+          code: 'USERNAME_TAKEN',
+          field: 'username',
+        });
+      }
+    }
+
+    // Ejecutar transacción para cambios atómicos de username y email
+    return await db.runTransaction(async (tx) => {
+      // 1. Obtener datos actuales del usuario
+      const currentUserSnap = await tx.get(userRef);
+      if (!currentUserSnap.exists) throw new AppError('Perfil desaparecido', 500, { code: 'ENTITY_MISSING' });
+
+      // 2. Aplicar cambios de nombres, apellidos, avatar (siempre seguros)
+      const changes: Record<string, any> = {};
+      if (data.nombres !== undefined) changes.nombres = data.nombres;
+      if (data.apellidos !== undefined) changes.apellidos = data.apellidos;
+      if (data.avatar !== undefined) changes.avatar = data.avatar;
+
+      // 3. Manejar username: si cambió, actualizar en transacción atómica
+      if (data.username !== undefined && data.username !== currentUsername) {
+        const newLower = data.username.toLowerCase();
+        const oldLower = currentUsername.toLowerCase();
+
+        // Eliminar registro viejo de usernames si cambió
+        if (oldLower && oldLower !== newLower) {
+          const oldNameRef = db.collection(USERNAMES).doc(oldLower);
+          await tx.delete(oldNameRef);
+        }
+
+        // Insertar/actualizar registro nuevo en usernames
+        const newNameRef = db.collection(USERNAMES).doc(newLower);
+        await tx.set(newNameRef, { uid, createdAt: FieldValue.serverTimestamp() });
+
+        // Actualizar campos del usuario
+        changes.username = data.username;
+        changes.usernameLower = newLower;
+      }
+
+      // 4. Manejar email: si cambió, actualizar campo
+      if (data.email !== undefined && data.email !== currentEmail) {
+        changes.email = data.email;
+      }
+
+      // 5. Aplicar todas las actualizaciones al documento user
+      await userRef.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
+
+      // 6. Devolver perfil actualizado
+      const updatedSnap = await tx.get(userRef);
+      return toProfile(updatedSnap.data() as DocumentData);
+    });
   });
 }

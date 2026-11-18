@@ -28,5 +28,10 @@ export const updateProfileSchema = z
     nombres: nameSchema.optional(),
     apellidos: nameSchema.optional(),
     avatar: avatarSchema.optional(),
+    username: usernameSchema.optional(),
+    email: emailSchema.optional(),
   })
-  .refine((d) => Object.keys(d).length > 0, 'Envía al menos un campo para actualizar');
+  .refine(
+    (d) => Object.keys(d).some((k) => d[k as keyof typeof d] !== undefined),
+    'Envía al menos un campo para actualizar'
+  );

@@ -88,21 +88,137 @@ paths:
         '404': { description: Perfil no creado aún }
     patch:
       tags: [Usuarios]
-      summary: Editar nombres, apellidos o avatar
+      summary: Editar perfil del usuario (nombre, apellido, avatar, username, email)
       security: [{ bearerAuth: [] }]
       requestBody:
+        required: false
         content:
           application/json:
             schema:
               type: object
               properties:
-                nombres: { type: string }
-                apellidos: { type: string }
-                avatar: { type: string }
+                nombres: { type: string, description: 'Nombres' }
+                apellidos: { type: string, description: 'Apellidos' }
+                avatar: { type: string, description: 'Avatar / URL' }
+                username: { type: string, description: 'Nuevo nombre de usuario (3-20 chars, letras/números/_)' }
+                email: { type: string, format: 'email', description: 'Nuevo correo electrónico' }
       responses:
-        '200': { description: Perfil actualizado }
+        '200': { description: Perfil actualizado, content: { application/json: { schema: { $ref: '#/components/schemas/UserProfile' } } } }
+        '400': { description: Datos de validación inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: No autorizado, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Perfil incompleto (falta username), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /api/rooms:
+    post:
+      tags: [Salas]
+      summary: Crear una sala de estudio
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre]
+              properties:
+                nombre: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        '201': { description: Sala creada, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '400': { description: Datos inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { description: No autorizado }
-        '403': { description: Perfil incompleto (falta username) }
+        '403': { description: Perfil incompleto }
+    get:
+      tags: [Salas]
+      summary: Listar salas propias del usuario autenticado
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Lista de salas, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Room' } } } } }
+        '401': { description: No autorizado }
+  /api/rooms/{roomId}:
+    patch:
+      tags: [Salas]
+      summary: Editar el nombre de una sala (solo anfitrión)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nombre]
+              properties:
+                nombre: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        '200': { description: Sala actualizada, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '400': { description: Datos inválidos }
+        '401': { description: No autorizado }
+        '403': { description: No es el anfitrión }
+        '404': { description: Sala no encontrada }
+    delete:
+      tags: [Salas]
+      summary: Eliminar una sala (solo anfitrión)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Sala eliminada }
+        '401': { description: No autorizado }
+        '403': { description: No es el anfitrión }
+        '404': { description: Sala no encontrada }
+  /api/rooms/{roomId}/join:
+    post:
+      tags: [Salas]
+      summary: Unirse a una sala por su ID
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Usuario unido a la sala }
+        '401': { description: No autorizado }
+        '404': { description: Sala no encontrada }
+  /api/rooms/{roomId}/members:
+    get:
+      tags: [Salas]
+      summary: Listar miembros de una sala
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Miembros de la sala }
+        '404': { description: Sala no encontrada }
+  /api/rooms/{roomId}/messages:
+    post:
+      tags: [Mensajes]
+      summary: Enviar un mensaje a una sala
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [texto]
+              properties:
+                texto: { type: string, minLength: 1, maxLength: 1000 }
+      responses:
+        '201': { description: Mensaje enviado, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { description: Datos inválidos }
+        '401': { description: No autorizado }
+        '404': { description: Sala no encontrada }
+    get:
+      tags: [Mensajes]
+      summary: Obtener historial de mensajes de una sala
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200': { description: Historial de mensajes, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
+        '401': { description: No autorizado }
+        '404': { description: Sala no encontrada }
 components:
   securitySchemes:
     bearerAuth:
@@ -121,6 +237,23 @@ components:
         avatar: { type: string, nullable: true }
         provider: { type: string, enum: [password, google] }
         profileComplete: { type: boolean }
+    Room:
+      type: object
+      properties:
+        id: { type: string }
+        nombre: { type: string }
+        anfitriónId: { type: string }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        roomId: { type: string }
+        autorId: { type: string }
+        autorNombre: { type: string }
+        texto: { type: string }
+        createdAt: { type: string }
     Error:
       type: object
       properties:
