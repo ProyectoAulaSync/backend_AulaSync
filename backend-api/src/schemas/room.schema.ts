@@ -1,12 +1,17 @@
 import { z } from 'zod';
-import { nameSchema } from './user.schema';
+
+export const roomNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'El nombre de la sala es obligatorio')
+  .max(80, 'El nombre de la sala debe tener máximo 80 caracteres');
 
 export const roomCreateSchema = z.object({
-  nombre: nameSchema.max(80, 'El nombre de la sala debe tener máximo 80 caracteres'),
+  nombre: roomNameSchema,
 });
 
 export const roomUpdateSchema = z.object({
-  nombre: nameSchema.max(80, 'El nombre de la sala debe tener máximo 80 caracteres'),
+  nombre: roomNameSchema,
 });
 
 export const roomIdParamSchema = z.object({
