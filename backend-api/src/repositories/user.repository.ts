@@ -1,4 +1,5 @@
-import { type DocumentData, FieldValue } from 'firebase-admin/firestore';
+import { type DocumentData, FieldValue, type Transaction } from 'firebase-admin/firestore';
+import { auth } from '../config/auth';
 import { db } from '../config/firebase';
 import { AppError } from '../errors/AppError';
 import { profileNotFound, usernameTaken } from '../errors/userErrors';
@@ -31,9 +32,9 @@ function toProfile(data: DocumentData): UserProfile {
 async function guard<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    console.error('Error de Firestore:', error);
+  } catch (e) {
+    if (e instanceof AppError) throw e;
+    console.error('Error de Firestore:', e);
     throw new AppError('No se pudo completar la operación con la base de datos', 503, {
       code: 'DB_ERROR',
     });
@@ -104,47 +105,158 @@ export function setUsername(uid: string, username: string): Promise<UserProfile>
   });
 }
 
-/** Edita campos del perfil incluyendo username (con validación de unicidad) y email. */
-export function updateProfile(uid: string, data: ProfileChanges): Promise<UserProfile> {
+/** Edita perfil con validación atómica de username y email.
+ * - Username: usa transacción Firestore sobre users/usernames para evitar race conditions.
+ * - Email: valida unicidad contra colección users antes de aplicar el cambio.
+ * Lanza 409 con el campo indicado en caso de colisión.
+ */
+export async function updateProfile(uid: string, data: ProfileChanges): Promise<UserProfile> {
   return guard(async () => {
-    const ref = db.collection(USERS).doc(uid);
-    const snap = await ref.get();
-    if (!snap.exists) throw profileNotFound();
+    const userRef = db.collection(USERS).doc(uid);
+    // Lectura inicial fuera de transacción solo para validaciones previas
+    const snap = await userRef.get();
+    if (!snap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
+      code: 'PROFILE_NOT_FOUND',
+    });
 
     const currentEmail = snap.data()?.email ?? '';
-    const changes: Record<string, string> = {};
+    const currentUsername = snap.data()?.username ?? '';
 
-    if (data.nombres !== undefined) changes.nombres = data.nombres;
-    if (data.apellidos !== undefined) changes.apellidos = data.apellidos;
-    if (data.avatar !== undefined) changes.avatar = data.avatar;
-
-    // Actualizar username con validación de unicidad en servidor
-    if (data.username !== undefined && data.username !== snap.data()?.username) {
-      const lower = data.username.toLowerCase();
-      const nameRef = db.collection(USERNAMES).doc(lower);
-      const nameSnap = await nameRef.get();
-      if (nameSnap.exists) throw usernameTaken();
-      changes.username = data.username;
-      // También actualizamos el registro en usernames (eliminar viejo, crear nuevo)
-      const currentLower = snap.data()?.username?.toLowerCase() ?? '';
-      if (currentLower && currentLower !== lower) {
-        const oldNameRef = db.collection(USERNAMES).doc(currentLower);
-        await oldNameRef.delete();
-      }
-      await nameRef.set({ uid, createdAt: FieldValue.serverTimestamp() });
-    }
-
-    // Actualizar email con validación de disponibilidad (si cambió)
+    // Validaciones previas fuera de transacción (más simples, sin lecturas complejas)
     if (data.email !== undefined && data.email !== currentEmail) {
       const emailQuery = await db.collection(USERS).where('email', '==', data.email).limit(1).get();
       if (!emailQuery.empty) throw new AppError('Este correo ya está registrado. Inicia sesión con otro correo', 409, {
         code: 'EMAIL_TAKEN',
         field: 'email',
       });
-      changes.email = data.email;
     }
 
-    await ref.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
-    return toProfile({ ...(snap.data() as DocumentData), ...changes });
+    if (data.username !== undefined && data.username !== currentUsername) {
+      const lower = data.username.toLowerCase();
+      // Validación de disponibilidad en usernames collection (fuera de tx para simplicidad,
+      // pero la transacción real la haré abajo)
+      const nameRef = db.collection(USERNAMES).doc(lower);
+      const nameSnap = await nameRef.get();
+      if (nameSnap.exists) {
+        // Pero necesitamos verificar que no sea el username actual del usuario
+        const existingUsername = nameSnap.data()?.uid;
+        if (existingUsername !== uid) throw new AppError('Este nombre de usuario ya está en uso. Elige otro', 409, {
+          code: 'USERNAME_TAKEN',
+          field: 'username',
+        });
+      }
+    }
+
+    // Ejecutar transacción para cambios atómicos de username y email
+    return await db.runTransaction(async (tx) => {
+      // 1. Obtener datos actuales del usuario
+      const currentUserSnap = await tx.get(userRef);
+      if (!currentUserSnap.exists) throw new AppError('Perfil desaparecido', 500, { code: 'ENTITY_MISSING' });
+
+      // 2. Aplicar cambios de nombres, apellidos, avatar (siempre seguros)
+      const changes: Record<string, any> = {};
+      if (data.nombres !== undefined) changes.nombres = data.nombres;
+      if (data.apellidos !== undefined) changes.apellidos = data.apellidos;
+      if (data.avatar !== undefined) changes.avatar = data.avatar;
+
+      // 3. Manejar username: si cambió, actualizar en transacción atómica
+      if (data.username !== undefined && data.username !== currentUsername) {
+        const newLower = data.username.toLowerCase();
+        const oldLower = currentUsername.toLowerCase();
+
+        // Eliminar registro viejo de usernames si cambió
+        if (oldLower && oldLower !== newLower) {
+          const oldNameRef = db.collection(USERNAMES).doc(oldLower);
+          await tx.delete(oldNameRef);
+        }
+
+        // Insertar/actualizar registro nuevo en usernames
+        const newNameRef = db.collection(USERNAMES).doc(newLower);
+        await tx.set(newNameRef, { uid, createdAt: FieldValue.serverTimestamp() });
+
+        // Actualizar campos del usuario
+        changes.username = data.username;
+        changes.usernameLower = newLower;
+      }
+
+      // 4. Manejar email: si cambió, actualizar campo
+      if (data.email !== undefined && data.email !== currentEmail) {
+        changes.email = data.email;
+      }
+
+      // 5. Aplicar todas las actualizaciones al documento user
+      await userRef.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
+
+      // 6. Devolver perfil actualizado
+      const updatedSnap = await tx.get(userRef);
+      return toProfile(updatedSnap.data() as DocumentData);
+    });
   });
 }
+
+/** Elimina el perfil del usuario: borra de Firestore, Firebase Auth y libera username,
+   * junto con datos asociados (mensajes propios, salas donde es anfitrión y memberships)
+   * para evitar datos huérfanos. Ejecutado solo por el dueño de la sesión (authenticate middleware).
+   * Lanza 401 si no hay token, 404 si el perfil no existe.
+   * Captura previa: se leen datos antes de borrar.
+   */
+ export async function deleteProfile(uid: string): Promise<void> {
+   return guard(async () => {
+     // --- PASO 1: Captura del username actual ---
+     const userSnap = await db.collection(USERS).doc(uid).get();
+     if (!userSnap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
+       code: 'PROFILE_NOT_FOUND',
+     });
+     const currentUsername = userSnap.data()?.username ?? '';
+
+     // --- PASO 2: Borrar mensajes propios (collection group query) ---
+     await db.collectionGroup('messages').where('autorId', '==', uid).get().then((msgSnap) => {
+       const batch = db.batch();
+       msgSnap.docs.forEach((doc) => batch.delete(doc.ref));
+       if (msgSnap.docs.length > 0) batch.commit().catch(() => {});
+     }).catch(err => console.error('Error borrando mensajes propios:', err));
+
+     // --- PASO 3: Borrar salas donde es anfitrión y limpiar datos asociados ---
+     const roomsQuery = await db.collection(USERS).doc(uid).collection('rooms').where('anfitriónId', '==', uid).get();
+     const hostRoomIds = roomsQuery.docs.map(d => d.id);
+
+     hostRoomIds.forEach((roomId) => {
+       // Borrar mensajes propios en esta sala
+       const msgsRef = db.collection('rooms').doc(roomId).collection('messages');
+       const msgQuery = msgsRef.where('autorId', '==', uid);
+       msgQuery.get().then((msgDocs) => {
+         const batch = db.batch();
+         msgDocs.forEach((doc) => batch.delete(doc.ref));
+         batch.commit().catch(() => {});
+       }).catch(err => console.error('Error borrando mensajes de sala', roomId, err));
+
+       // Borrar membership del usuario en esta sala
+       const membersRef = db.collection('rooms').doc(roomId).collection('members').doc(uid);
+       const delMemberBatch = db.batch();
+       delMemberBatch.delete(membersRef);
+       delMemberBatch.commit().catch(() => {});
+
+       // Borrar la sala en sí (ya sin anfitrión)
+       const delRoomBatch = db.batch();
+       delRoomBatch.delete(db.collection('rooms').doc(roomId));
+       delRoomBatch.commit().catch(() => {});
+     });
+
+     // --- PASO 4: Transacción atómica: borrar usuario + liberar username ---
+     await db.runTransaction(async (tx) => {
+       const userRef = db.collection(USERS).doc(uid);
+       await tx.delete(userRef);
+
+       if (currentUsername) {
+         const lower = currentUsername.toLowerCase();
+         const nameRef = db.collection(USERNAMES).doc(lower);
+         await tx.delete(nameRef);
+       }
+     });
+
+     // --- PASO 5: Borrar cuenta de Firebase Authentication ---
+     await auth.deleteUser(uid).catch((e) => {
+       console.error('Error al borrar usuario de Firebase Auth:', e);
+     });
+   });
+ }

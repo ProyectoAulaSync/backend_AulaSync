@@ -67,10 +67,16 @@ export async function createRoom(nombre: string, anfitriónId: string): Promise<
   });
 }
 
+/** Salas creadas por el usuario. Filtra en Firestore y ordena en memoria para no requerir índice compuesto. */
 export async function listRoomsByHost(anfitriónId: string): Promise<Room[]> {
   return guard(async () => {
-    const snap = await db.collection(ROOMS).where('anfitriónId', '==', anfitriónId).orderBy('updatedAt', 'desc').get();
-    return snap.docs.map(toRoom);
+    const snap = await db.collection(ROOMS).where('anfitriónId', '==', anfitriónId).get();
+    const rooms = snap.docs.map(toRoom);
+    const millis = (v: unknown): number =>
+      v && typeof (v as { toMillis?: unknown }).toMillis === 'function'
+        ? (v as { toMillis: () => number }).toMillis()
+        : 0;
+    return rooms.sort((a, b) => millis(b.updatedAt) - millis(a.updatedAt));
   });
 }
 

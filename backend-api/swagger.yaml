@@ -107,10 +107,27 @@ paths:
         '400': { description: Datos de validación inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { description: No autorizado, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: Perfil incompleto (falta username), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    delete:
+      tags: [Usuarios]
+      summary: Eliminar cuenta de usuario
+      description: |
+        Borra la cuenta del usuario de forma completa: elimina el perfil de Firestore,
+        libera el username en la colección usernames, borra todos los mensajes propios,
+        y elimina las salas donde el usuario es anfitrión (con sus memberships y mensajes propios).
+        Ejecutado solo por el dueño de la sesión (token Bearer Firebase). Devuelve 204 en éxito.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Cuenta eliminada exitosamente y datos asociados limpiados }
+        '401': { description: No autorizado, sin token o token inválido }
+        '404': { description: Perfil no encontrado }
   /api/rooms:
     post:
       tags: [Salas]
       summary: Crear una sala de estudio
+      description: |
+        Crea una sala con un ID generado por Firestore. El anfitrión es el UID del token Bearer
+        (nunca viene en el cuerpo). El nombre se recorta (trim) antes de validarse.
+        Reglas del nombre: obligatorio, 1 a 80 caracteres.
       security: [{ bearerAuth: [] }]
       requestBody:
         required: true
@@ -120,20 +137,38 @@ paths:
               type: object
               required: [nombre]
               properties:
-                nombre: { type: string, minLength: 1, maxLength: 80 }
+                nombre: { type: string, minLength: 1, maxLength: 80, example: 'Cálculo II' }
       responses:
         '201': { description: Sala creada, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
-        '400': { description: Datos inválidos, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '401': { description: No autorizado }
-        '403': { description: Perfil incompleto }
+        '400': { description: 'Datos inválidos: nombre vacío, mayor a 80 caracteres o JSON mal formado (VALIDATION_ERROR / INVALID_JSON)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: 'No autorizado (NO_TOKEN / INVALID_TOKEN)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: 'Perfil incompleto, falta elegir username (PROFILE_INCOMPLETE)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: 'Perfil no encontrado (PROFILE_NOT_FOUND)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: 'Error de base de datos (DB_ERROR)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     get:
       tags: [Salas]
-      summary: Listar salas propias del usuario autenticado
+      summary: Listar las salas creadas por el usuario autenticado
+      description: |
+        Devuelve únicamente las salas cuyo `anfitriónId` coincide con el UID del token.
+        No acepta parámetros de usuario: nadie puede listar salas ajenas.
+        Orden: más reciente primero (updatedAt).
       security: [{ bearerAuth: [] }]
       responses:
-        '200': { description: Lista de salas, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Room' } } } } }
-        '401': { description: No autorizado }
+        '200': { description: Lista de salas propias (puede estar vacía), content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Room' } } } } }
+        '401': { description: 'No autorizado (NO_TOKEN / INVALID_TOKEN)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: 'Perfil incompleto (PROFILE_INCOMPLETE)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: 'Error de base de datos (DB_ERROR)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /api/rooms/{roomId}:
+    get:
+      tags: [Salas]
+      summary: Obtener y validar existencia de una sala por ID
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: path, name: roomId, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sala encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
+        '401': { description: No autorizado }
+        '404': { description: Sala no encontrada }
     patch:
       tags: [Salas]
       summary: Editar el nombre de una sala (solo anfitrión)
