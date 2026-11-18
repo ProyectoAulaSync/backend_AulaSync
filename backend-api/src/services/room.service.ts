@@ -1,4 +1,5 @@
 import type { RoomCreateInput, RoomUpdateInput } from '../schemas/room.schema';
+import type { Room } from '../types/room';
 import * as roomRepo from '../repositories/room.repository';
 import { profileNotFound } from '../errors/userErrors';
 
@@ -26,5 +27,9 @@ export async function joinRoomService(roomId: string, uid: string) {
 
 export async function listRoomMembersService(roomId: string) {
   return roomRepo.listMembers(roomId);
+}
+
+export async function findRoomById(roomId: string): Promise<Room | null> {
+  return roomRepo.findRoomById(roomId);
 }
 
