@@ -1,4 +1,4 @@
-import { type DocumentData, FieldValue, type Transaction } from 'firebase-admin/firestore';
+import { type DocumentData, FieldPath, FieldValue, type Query, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { auth } from '../config/auth';
 import { db } from '../config/firebase';
 import { AppError } from '../errors/AppError';
@@ -7,6 +7,8 @@ import type { UserProfile } from '../types/user';
 
 const USERS = 'users'; // users/{uid}
 const USERNAMES = 'usernames'; // usernames/{usernameEnMinusculas} -> { uid }  (garantiza unicidad)
+const ROOMS = 'rooms';
+const DELETE_BATCH_SIZE = 500;
 
 export interface ProfileChanges {
   nombres?: string | undefined;
@@ -38,6 +40,37 @@ async function guard<T>(fn: () => Promise<T>): Promise<T> {
     throw new AppError('No se pudo completar la operación con la base de datos', 503, {
       code: 'DB_ERROR',
     });
+  }
+}
+
+async function deleteQueryInBatches(query: Query<DocumentData>): Promise<void> {
+  while (true) {
+    const snapshot = await query.limit(DELETE_BATCH_SIZE).get();
+    if (snapshot.empty) return;
+
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+}
+
+async function deleteUserMemberships(uid: string): Promise<void> {
+  const roomsQuery = db.collection(ROOMS).orderBy(FieldPath.documentId());
+  let lastRoom: QueryDocumentSnapshot<DocumentData> | undefined;
+
+  while (true) {
+    const query = lastRoom
+      ? roomsQuery.startAfter(lastRoom).limit(DELETE_BATCH_SIZE)
+      : roomsQuery.limit(DELETE_BATCH_SIZE);
+    const snapshot = await query.get();
+    if (snapshot.empty) return;
+
+    const batch = db.batch();
+    snapshot.docs.forEach((room) => {
+      batch.delete(room.ref.collection('members').doc(uid));
+    });
+    await batch.commit();
+    lastRoom = snapshot.docs[snapshot.docs.length - 1];
   }
 }
 
@@ -182,69 +215,43 @@ export async function updateProfile(uid: string, data: ProfileChanges): Promise<
   });
 }
 
-/** Elimina el perfil del usuario: borra de Firestore, Firebase Auth y libera username,
-   * junto con datos asociados (mensajes propios, salas donde es anfitrión y memberships)
-   * para evitar datos huérfanos. Ejecutado solo por el dueño de la sesión (authenticate middleware).
-   * Lanza 401 si no hay token, 404 si el perfil no existe.
-   * Captura previa: se leen datos antes de borrar.
-   */
- export async function deleteProfile(uid: string): Promise<void> {
-   return guard(async () => {
-     // --- PASO 1: Captura del username actual ---
-     const userSnap = await db.collection(USERS).doc(uid).get();
-     if (!userSnap.exists) throw new AppError('No encontramos tu perfil. Completa tu registro', 404, {
-       code: 'PROFILE_NOT_FOUND',
-     });
-     const currentUsername = userSnap.data()?.username ?? '';
+/** Borra los datos asociados y elimina la cuenta de Auth al final para permitir reintentos. */
+export async function deleteProfile(uid: string): Promise<void> {
+  return guard(async () => {
+    await deleteQueryInBatches(db.collectionGroup('messages').where('autorId', '==', uid));
+    await deleteUserMemberships(uid);
 
-     // --- PASO 2: Borrar mensajes propios (collection group query) ---
-     await db.collectionGroup('messages').where('autorId', '==', uid).get().then((msgSnap) => {
-       const batch = db.batch();
-       msgSnap.docs.forEach((doc) => batch.delete(doc.ref));
-       if (msgSnap.docs.length > 0) batch.commit().catch(() => {});
-     }).catch(err => console.error('Error borrando mensajes propios:', err));
+    const hostRoomsQuery = db.collection(ROOMS).where('anfitriónId', '==', uid);
+    while (true) {
+      const roomsSnapshot = await hostRoomsQuery.limit(DELETE_BATCH_SIZE).get();
+      if (roomsSnapshot.empty) break;
 
-     // --- PASO 3: Borrar salas donde es anfitrión y limpiar datos asociados ---
-     const roomsQuery = await db.collection(USERS).doc(uid).collection('rooms').where('anfitriónId', '==', uid).get();
-     const hostRoomIds = roomsQuery.docs.map(d => d.id);
+      for (const room of roomsSnapshot.docs) {
+        await deleteQueryInBatches(room.ref.collection('members'));
+        await deleteQueryInBatches(room.ref.collection('messages'));
+        await room.ref.delete();
+      }
+    }
 
-     hostRoomIds.forEach((roomId) => {
-       // Borrar mensajes propios en esta sala
-       const msgsRef = db.collection('rooms').doc(roomId).collection('messages');
-       const msgQuery = msgsRef.where('autorId', '==', uid);
-       msgQuery.get().then((msgDocs) => {
-         const batch = db.batch();
-         msgDocs.forEach((doc) => batch.delete(doc.ref));
-         batch.commit().catch(() => {});
-       }).catch(err => console.error('Error borrando mensajes de sala', roomId, err));
+    await deleteQueryInBatches(db.collection(USERNAMES).where('uid', '==', uid));
+    await db.collection(USERS).doc(uid).delete();
 
-       // Borrar membership del usuario en esta sala
-       const membersRef = db.collection('rooms').doc(roomId).collection('members').doc(uid);
-       const delMemberBatch = db.batch();
-       delMemberBatch.delete(membersRef);
-       delMemberBatch.commit().catch(() => {});
+    try {
+      await auth.deleteUser(uid);
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'auth/user-not-found'
+      ) {
+        return;
+      }
 
-       // Borrar la sala en sí (ya sin anfitrión)
-       const delRoomBatch = db.batch();
-       delRoomBatch.delete(db.collection('rooms').doc(roomId));
-       delRoomBatch.commit().catch(() => {});
-     });
-
-     // --- PASO 4: Transacción atómica: borrar usuario + liberar username ---
-     await db.runTransaction(async (tx) => {
-       const userRef = db.collection(USERS).doc(uid);
-       await tx.delete(userRef);
-
-       if (currentUsername) {
-         const lower = currentUsername.toLowerCase();
-         const nameRef = db.collection(USERNAMES).doc(lower);
-         await tx.delete(nameRef);
-       }
-     });
-
-     // --- PASO 5: Borrar cuenta de Firebase Authentication ---
-     await auth.deleteUser(uid).catch((e) => {
-       console.error('Error al borrar usuario de Firebase Auth:', e);
-     });
-   });
- }
+      console.error('Error al borrar usuario de Firebase Auth:', error);
+      throw new AppError('No se pudo eliminar la cuenta de Firebase Authentication', 500, {
+        code: 'AUTH_DELETE_FAILED',
+      });
+    }
+  });
+}
