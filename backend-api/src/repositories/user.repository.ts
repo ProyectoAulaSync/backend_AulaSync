@@ -131,65 +131,53 @@ export async function updateProfile(uid: string, data: ProfileChanges): Promise<
       });
     }
 
-    if (data.username !== undefined && data.username !== currentUsername) {
-      const lower = data.username.toLowerCase();
-      // Validación de disponibilidad en usernames collection (fuera de tx para simplicidad,
-      // pero la transacción real la haré abajo)
-      const nameRef = db.collection(USERNAMES).doc(lower);
-      const nameSnap = await nameRef.get();
-      if (nameSnap.exists) {
-        // Pero necesitamos verificar que no sea el username actual del usuario
-        const existingUsername = nameSnap.data()?.uid;
-        if (existingUsername !== uid) throw new AppError('Este nombre de usuario ya está en uso. Elige otro', 409, {
+    return await db.runTransaction(async (tx) => {
+      const currentUserSnap = await tx.get(userRef);
+      if (!currentUserSnap.exists) throw new AppError('Perfil desaparecido', 500, { code: 'ENTITY_MISSING' });
+
+      const currentUser = currentUserSnap.data() as DocumentData;
+      const transactionUsername = currentUser.username ?? '';
+      const usernameChanged = data.username !== undefined && data.username !== transactionUsername;
+      const newLower = data.username?.toLowerCase() ?? '';
+      const oldLower = usernameChanged ? transactionUsername.toLowerCase() : '';
+      const newNameRef = usernameChanged ? db.collection(USERNAMES).doc(newLower) : null;
+      const oldNameRef = usernameChanged && oldLower && oldLower !== newLower
+        ? db.collection(USERNAMES).doc(oldLower)
+        : null;
+
+      let newNameSnap = null;
+      if (newNameRef) {
+        newNameSnap = await tx.get(newNameRef);
+      }
+      if (oldNameRef) {
+        await tx.get(oldNameRef);
+      }
+
+      if (newNameSnap?.exists && newNameSnap.data()?.uid !== uid) {
+        throw new AppError('Este nombre de usuario ya está en uso. Elige otro', 409, {
           code: 'USERNAME_TAKEN',
           field: 'username',
         });
       }
-    }
 
-    // Ejecutar transacción para cambios atómicos de username y email
-    return await db.runTransaction(async (tx) => {
-      // 1. Obtener datos actuales del usuario
-      const currentUserSnap = await tx.get(userRef);
-      if (!currentUserSnap.exists) throw new AppError('Perfil desaparecido', 500, { code: 'ENTITY_MISSING' });
-
-      // 2. Aplicar cambios de nombres, apellidos, avatar (siempre seguros)
       const changes: Record<string, any> = {};
       if (data.nombres !== undefined) changes.nombres = data.nombres;
       if (data.apellidos !== undefined) changes.apellidos = data.apellidos;
       if (data.avatar !== undefined) changes.avatar = data.avatar;
 
-      // 3. Manejar username: si cambió, actualizar en transacción atómica
-      if (data.username !== undefined && data.username !== currentUsername) {
-        const newLower = data.username.toLowerCase();
-        const oldLower = currentUsername.toLowerCase();
-
-        // Eliminar registro viejo de usernames si cambió
-        if (oldLower && oldLower !== newLower) {
-          const oldNameRef = db.collection(USERNAMES).doc(oldLower);
-          await tx.delete(oldNameRef);
-        }
-
-        // Insertar/actualizar registro nuevo en usernames
-        const newNameRef = db.collection(USERNAMES).doc(newLower);
-        await tx.set(newNameRef, { uid, createdAt: FieldValue.serverTimestamp() });
-
-        // Actualizar campos del usuario
+      if (usernameChanged && newNameRef && data.username !== undefined) {
+        if (oldNameRef) tx.delete(oldNameRef);
+        tx.set(newNameRef, { uid, createdAt: FieldValue.serverTimestamp() });
         changes.username = data.username;
         changes.usernameLower = newLower;
       }
 
-      // 4. Manejar email: si cambió, actualizar campo
       if (data.email !== undefined && data.email !== currentEmail) {
         changes.email = data.email;
       }
 
-      // 5. Aplicar todas las actualizaciones al documento user
-      await userRef.update({ ...changes, updatedAt: FieldValue.serverTimestamp() });
-
-      // 6. Devolver perfil actualizado
-      const updatedSnap = await tx.get(userRef);
-      return toProfile(updatedSnap.data() as DocumentData);
+      tx.update(userRef, { ...changes, updatedAt: FieldValue.serverTimestamp() });
+      return toProfile({ ...currentUser, ...changes });
     });
   });
 }
