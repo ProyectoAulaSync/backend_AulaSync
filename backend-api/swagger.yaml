@@ -112,14 +112,17 @@ paths:
       summary: Eliminar cuenta de usuario
       description: |
         Borra la cuenta del usuario de forma completa: elimina el perfil de Firestore,
-        libera el username en la colección usernames, borra todos los mensajes propios,
-        y elimina las salas donde el usuario es anfitrión (con sus memberships y mensajes propios).
+        libera el username en la colección usernames, borra todos los mensajes escritos por el usuario
+        incluso en salas ajenas, elimina sus membresías en otras salas y elimina las salas donde es
+        anfitrión junto con sus miembros y mensajes. Si el perfil ya no existe, la operación continúa
+        para permitir reintentos. Un usuario que ya no existe en Firebase Authentication se considera eliminado.
         Ejecutado solo por el dueño de la sesión (token Bearer Firebase). Devuelve 204 en éxito.
       security: [{ bearerAuth: [] }]
       responses:
         '204': { description: Cuenta eliminada exitosamente y datos asociados limpiados }
-        '401': { description: No autorizado, sin token o token inválido }
-        '404': { description: Perfil no encontrado }
+        '401': { description: 'No autorizado (NO_TOKEN / INVALID_TOKEN)' }
+        '500': { description: 'No se pudo eliminar la cuenta de Firebase Authentication (AUTH_DELETE_FAILED)' }
+        '503': { description: 'Error limpiando datos en Firestore (DB_ERROR)' }
   /api/rooms:
     post:
       tags: [Salas]
@@ -278,8 +281,16 @@ components:
         id: { type: string }
         nombre: { type: string }
         anfitriónId: { type: string }
-        createdAt: { type: string }
-        updatedAt: { type: string }
+        createdAt:
+          type: object
+          properties:
+            _seconds: { type: integer, format: int64 }
+            _nanoseconds: { type: integer }
+        updatedAt:
+          type: object
+          properties:
+            _seconds: { type: integer, format: int64 }
+            _nanoseconds: { type: integer }
     Message:
       type: object
       properties:
