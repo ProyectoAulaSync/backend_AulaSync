@@ -1,4 +1,11 @@
-import { type DocumentData, FieldValue, type DocumentSnapshot, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
+import {
+  type DocumentData,
+  FieldPath,
+  FieldValue,
+  type DocumentSnapshot,
+  type QueryDocumentSnapshot,
+  Timestamp,
+} from 'firebase-admin/firestore';
 import { db } from '../config/firebase';
 import { AppError } from '../errors/AppError';
 import { profileNotFound } from '../errors/userErrors';
@@ -30,8 +37,44 @@ function toMessage(doc: DocumentSnapshot<DocumentData>): Message {
     autorId: data.autorId,
     autorNombre: data.autorNombre,
     texto: data.texto,
-    createdAt: data.createdAt,
+    createdAt: toISOString(data.createdAt),
   };
+}
+
+function toISOString(value: unknown): string {
+  const date =
+    value instanceof Date
+      ? value
+      : value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function'
+        ? value.toDate()
+        : typeof value === 'string'
+          ? new Date(value)
+          : null;
+
+  if (!date || Number.isNaN(date.getTime())) {
+    throw new AppError('El mensaje contiene una fecha inválida', 500, { code: 'INVALID_MESSAGE_DATE' });
+  }
+  return date.toISOString();
+}
+
+function timestampFromCursor(value: string): Timestamp | null {
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      throw new AppError('El cursor de paginación no es válido', 400, { code: 'INVALID_CURSOR' });
+    }
+    return Timestamp.fromDate(date);
+  }
+  if (/^\d{10}$|^\d{13}$/.test(value)) {
+    const numericValue = Number(value);
+    const milliseconds = value.length === 10 ? numericValue * 1000 : numericValue;
+    const date = new Date(milliseconds);
+    if (Number.isNaN(date.getTime())) {
+      throw new AppError('El cursor de paginación no es válido', 400, { code: 'INVALID_CURSOR' });
+    }
+    return Timestamp.fromDate(date);
+  }
+  return null;
 }
 
 async function guard<T>(fn: () => Promise<T>): Promise<T> {
@@ -100,17 +143,16 @@ export async function deleteRoom(roomId: string, uid: string): Promise<void> {
     if (!room) throw new AppError('Sala no encontrada', 404, { code: 'ROOM_NOT_FOUND' });
     if (room.anfitriónId !== uid) throw new AppError('Solo el anfitrión puede eliminar la sala', 403, { code: 'FORBIDDEN' });
 
-    const batch = db.batch();
     const ref = db.collection(ROOMS).doc(roomId);
-    batch.delete(ref);
-
-    const membersSnap = await ref.collection('members').get();
-    membersSnap.docs.forEach((d) => batch.delete(d.ref));
-
-    const msgsSnap = await ref.collection('messages').get();
-    msgsSnap.docs.forEach((d) => batch.delete(d.ref));
-
-    await batch.commit();
+    for (const collectionName of ['members', 'messages']) {
+      const snapshot = await ref.collection(collectionName).get();
+      for (let index = 0; index < snapshot.docs.length; index += 500) {
+        const batch = db.batch();
+        snapshot.docs.slice(index, index + 500).forEach((doc) => batch.delete(doc.ref));
+        await batch.commit();
+      }
+    }
+    await ref.delete();
   });
 }
 
@@ -146,19 +188,35 @@ export async function saveMessage(roomId: string, autorId: string, autorNombre: 
 
     await db.collection(ROOMS).doc(roomId).update({ updatedAt: now });
 
-    return { id: ref.id, roomId, autorId, autorNombre, texto, createdAt: now };
+    const savedMessage = await ref.get();
+    return toMessage(savedMessage);
   });
 }
 
-export async function listMessages(roomId: string, limit = 50): Promise<Message[]> {
+export async function listMessages(roomId: string, limit = 50, before?: string): Promise<Message[]> {
   return guard(async () => {
     const room = await findRoomById(roomId);
     if (!room) throw new AppError('Sala no encontrada', 404, { code: 'ROOM_NOT_FOUND' });
 
-    const snap = await db.collection(ROOMS).doc(roomId).collection('messages')
+    const messagesRef = db.collection(ROOMS).doc(roomId).collection('messages');
+    let query = messagesRef
       .orderBy('createdAt', 'desc')
-      .limit(limit)
-      .get();
+      .orderBy(FieldPath.documentId(), 'desc');
+
+    if (before) {
+      const cursorTimestamp = timestampFromCursor(before);
+      if (cursorTimestamp) {
+        query = query.where('createdAt', '<', cursorTimestamp);
+      } else {
+        const cursorSnapshot = await messagesRef.doc(before).get();
+        if (!cursorSnapshot.exists) {
+          throw new AppError('No se encontró el cursor del historial', 400, { code: 'INVALID_CURSOR' });
+        }
+        query = query.startAfter(cursorSnapshot);
+      }
+    }
+
+    const snap = await query.limit(limit).get();
     return snap.docs.map(toMessage).reverse();
   });
 }

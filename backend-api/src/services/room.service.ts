@@ -2,6 +2,7 @@ import type { RoomCreateInput, RoomUpdateInput } from '../schemas/room.schema';
 import type { Room } from '../types/room';
 import * as roomRepo from '../repositories/room.repository';
 import { profileNotFound } from '../errors/userErrors';
+import { AppError } from '../errors/AppError';
 
 export async function createRoomService(nombre: string, anfitriónId: string) {
   const profile = await roomRepo.findProfileByUid(anfitriónId);
@@ -15,6 +16,14 @@ export async function listMyRoomsService(uid: string) {
 
 export async function updateRoomService(roomId: string, data: RoomUpdateInput, uid: string) {
   return roomRepo.updateRoom(roomId, data.nombre, uid);
+}
+
+export async function assertRoomHostService(roomId: string, uid: string): Promise<void> {
+  const room = await roomRepo.findRoomById(roomId);
+  if (!room) throw new AppError('Sala no encontrada', 404, { code: 'ROOM_NOT_FOUND' });
+  if (room.anfitriónId !== uid) {
+    throw new AppError('Solo el anfitrión puede editar la sala', 403, { code: 'FORBIDDEN' });
+  }
 }
 
 export async function deleteRoomService(roomId: string, uid: string) {
