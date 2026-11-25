@@ -6,8 +6,9 @@ export const messageCreateSchema = z.object({
 });
 
 export const messageHistoryQuerySchema = z.object({
-  roomId: z.string().trim().min(1, 'El ID de la sala es obligatorio'),
-  limit: z.coerce.number().min(1).max(100).default(50).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  before: z.string().trim().min(1).optional(),
 });
 
 export type MessageCreateInput = z.infer<typeof messageCreateSchema>;
+export type MessageHistoryQuery = z.infer<typeof messageHistoryQuerySchema>;

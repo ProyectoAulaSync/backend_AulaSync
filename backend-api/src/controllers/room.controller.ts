@@ -26,8 +26,9 @@ export const getRoomById = async (req: Request, res: Response): Promise<void> =>
 
 export const updateRoom = async (req: Request, res: Response): Promise<void> => {
   const roomId = String(req.params.roomId);
-  const { nombre } = roomUpdateSchema.parse(req.body);
   const uid = getAuthContext(res).uid;
+  await roomService.assertRoomHostService(roomId, uid);
+  const { nombre } = roomUpdateSchema.parse(req.body);
   const room = await roomService.updateRoomService(roomId, { nombre }, uid);
   res.json(room);
 };

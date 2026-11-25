@@ -2,12 +2,12 @@ import type { MessageCreateInput } from '../schemas/message.schema';
 import * as roomRepo from '../repositories/room.repository';
 import * as userRepo from '../repositories/user.repository';
 
-export async function sendMessageService(roomId: string, input: MessageCreateInput, autorNombre: string) {
-  return roomRepo.saveMessage(roomId, input.roomId, autorNombre, input.texto);
+export async function sendMessageService(roomId: string, input: MessageCreateInput, autorId: string, autorNombre: string) {
+  return roomRepo.saveMessage(roomId, autorId, autorNombre, input.texto);
 }
 
-export async function getHistoryService(roomId: string, limit?: number) {
-  return roomRepo.listMessages(roomId, limit);
+export async function getHistoryService(roomId: string, limit: number, before?: string) {
+  return roomRepo.listMessages(roomId, limit, before);
 }
 
 export async function resolveAutorNombre(uid: string): Promise<string> {
