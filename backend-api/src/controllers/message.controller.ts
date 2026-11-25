@@ -8,13 +8,13 @@ export const sendMessage = async (req: Request, res: Response): Promise<void> =>
   const input = messageCreateSchema.parse({ ...req.body, roomId });
   const uid = getAuthContext(res).uid;
   const autorNombre = await messageService.resolveAutorNombre(uid);
-  const mensaje = await messageService.sendMessageService(roomId, input, autorNombre);
+  const mensaje = await messageService.sendMessageService(roomId, input, uid, autorNombre);
   res.status(201).json(mensaje);
 };
 
 export const getHistory = async (req: Request, res: Response): Promise<void> => {
   const roomId = String(req.params.roomId);
-  const { limit } = messageHistoryQuerySchema.parse(req.query);
-  const historial = await messageService.getHistoryService(roomId, limit);
+  const { limit, before } = messageHistoryQuerySchema.parse(req.query);
+  const historial = await messageService.getHistoryService(roomId, limit, before);
   res.json(historial);
 };

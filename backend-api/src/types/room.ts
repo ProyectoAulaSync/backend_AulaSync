@@ -18,5 +18,5 @@ export interface Message {
   autorId: string;
   autorNombre: string;
   texto: string;
-  createdAt: unknown;
+  createdAt: string;
 }

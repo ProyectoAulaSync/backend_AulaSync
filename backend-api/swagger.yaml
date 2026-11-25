@@ -284,18 +284,16 @@ paths:
     get:
       tags: [Mensajes]
       summary: Obtener una página del historial en orden cronológico
-      description: Devuelve los mensajes del más antiguo al más reciente. before acepta el ID de un mensaje, un timestamp ISO 8601 o un timestamp Unix en segundos/milisegundos; se devuelven mensajes anteriores al cursor. El límite predeterminado es 50 y el máximo 100.
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: roomId, required: true, schema: { type: string } }
-        - { in: query, name: limit, required: false, description: Número de mensajes a devolver (predeterminado 50), schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
-        - { in: query, name: before, required: false, description: ID de mensaje o timestamp ISO 8601/Unix para solicitar mensajes anteriores, schema: { type: string, example: '2026-11-25T15:00:00.000Z' } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { in: query, name: before, description: ID de mensaje o fecha ISO 8601 para obtener mensajes anteriores, schema: { type: string } }
       responses:
         '200': { description: Historial de mensajes, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
         '401': { description: No autorizado }
         '404': { description: Sala no encontrada }
         '400': { description: Cursor de paginación inválido }
-        '503': { description: Error de base de datos }
 components:
   securitySchemes:
     bearerAuth:
