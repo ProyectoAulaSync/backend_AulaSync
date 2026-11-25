@@ -65,7 +65,11 @@ service cloud.firestore {
   - Valida que la sala existe
   - Guarda mensaje en `rooms/{roomId}/messages/{msgId}` con: `{ roomId, autorId, autorNombre, texto, createdAt }`
   - Actualiza `updatedAt` de la sala
-  - **Broadcast**: Socket.IO emite `chat-message` a todos los miembros de la MISMA sala (`io.to(roomId)`)
+  - **Broadcast**: Socket.IO emite `chat:message` (y el alias compatible `chat-message`) solo a los miembros de la MISMA sala (`io.to(roomId)`)
+- **Presencia en tiempo real**: Socket.IO valida `room:join` contra Firestore, mantiene participantes únicos por UID en memoria y emite `room:user-joined` / `room:user-left`
+- **Chat por Socket.IO**: `chat:send` requiere que el socket pertenezca a la sala y persiste el mensaje en Firestore usando `serverTimestamp()` antes de emitirlo
+- **Reconexión**: el cliente puede enviar `roomId` en `socket.handshake.auth` para reingresar automáticamente a la sala activa
+- **Eliminar sala**: `room:delete` solo permite al anfitrión; elimina la sala y subcolecciones, emite `room:deleted` y expulsa los sockets
 - **Historial de mensajes**: `GET /api/rooms/:roomId/messages?limit=50`
   - Consulta `rooms/{roomId}/messages` ordenado por `createdAt` (desc), límite 50 por defecto
   - Devuelve mensajes cronológicos invertidos para mostrar los más antiguos primero
