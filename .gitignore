@@ -1,0 +1,12 @@
+/.env
+/.env.*
+!/.env.example
+/backend-api/.env
+/backend-api/.env.*
+!/backend-api/.env.example
+/backend-realtime/.env
+/backend-realtime/.env.*
+!/backend-realtime/.env.example
+*serviceAccount*.json
+*firebase-adminsdk*.json
+firebase-service-account*.json

@@ -2,19 +2,43 @@ services:
   backend-api:
     build:
       context: ./backend-api
-    container_name: backend-api
-    env_file:
-      - ./backend-api/.env
+    environment:
+      PORT: "3001"
+      FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID:?Set FIREBASE_PROJECT_ID in the root .env file}"
+      FIREBASE_CLIENT_EMAIL: "${FIREBASE_CLIENT_EMAIL:?Set FIREBASE_CLIENT_EMAIL in the root .env file}"
+      FIREBASE_PRIVATE_KEY: "${FIREBASE_PRIVATE_KEY:?Set FIREBASE_PRIVATE_KEY in the root .env file}"
     ports:
-      - "3001:3001"
+      - "${API_PORT:-3001}:3001"
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   backend-realtime:
     build:
       context: ./backend-realtime
-    container_name: backend-realtime
     environment:
-      PORT: 3002
+      PORT: "3002"
+      FIREBASE_PROJECT_ID: "${FIREBASE_PROJECT_ID:?Set FIREBASE_PROJECT_ID in the root .env file}"
+      FIREBASE_CLIENT_EMAIL: "${FIREBASE_CLIENT_EMAIL:?Set FIREBASE_CLIENT_EMAIL in the root .env file}"
+      FIREBASE_PRIVATE_KEY: "${FIREBASE_PRIVATE_KEY:?Set FIREBASE_PRIVATE_KEY in the root .env file}"
     ports:
-      - "3002:3002"
+      - "${REALTIME_PORT:-3002}:3002"
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3002/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
