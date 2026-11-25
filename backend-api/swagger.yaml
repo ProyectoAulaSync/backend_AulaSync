@@ -2,7 +2,7 @@ openapi: 3.0.0
 info:
   title: API AulaSync
   version: 1.0.0
-  description: Documentación de los endpoints base para el Sprint 0
+  description: API REST de AulaSync: autenticación, perfiles, salas y mensajes con historial paginado.
 paths:
   /health:
     get:
@@ -164,17 +164,20 @@ paths:
   /api/rooms/{roomId}:
     get:
       tags: [Salas]
-      summary: Obtener y validar existencia de una sala por ID
+      summary: Obtener una sala por ID
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: roomId, required: true, schema: { type: string } }
       responses:
         '200': { description: Sala encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
         '401': { description: No autorizado }
+        '403': { description: Perfil incompleto }
         '404': { description: Sala no encontrada }
+        '503': { description: Error de base de datos }
     patch:
       tags: [Salas]
       summary: Editar el nombre de una sala (solo anfitrión)
+      description: El anfitrión se determina comparando estrictamente el UID del token Bearer con anfitriónId. El nombre se recorta y debe contener de 1 a 80 caracteres.
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: roomId, required: true, schema: { type: string } }
@@ -189,13 +192,15 @@ paths:
                 nombre: { type: string, minLength: 1, maxLength: 80 }
       responses:
         '200': { description: Sala actualizada, content: { application/json: { schema: { $ref: '#/components/schemas/Room' } } } }
-        '400': { description: Datos inválidos }
-        '401': { description: No autorizado }
-        '403': { description: No es el anfitrión }
-        '404': { description: Sala no encontrada }
+        '400': { description: Nombre inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: Token ausente o inválido, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: No es el anfitrión o el perfil está incompleto, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: Sala no encontrada, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: Error de base de datos }
     delete:
       tags: [Salas]
       summary: Eliminar una sala (solo anfitrión)
+      description: El anfitrión se determina por el UID del token Bearer. Elimina la sala y sus mensajes y miembros asociados.
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: roomId, required: true, schema: { type: string } }
@@ -204,6 +209,7 @@ paths:
         '401': { description: No autorizado }
         '403': { description: No es el anfitrión }
         '404': { description: Sala no encontrada }
+        '503': { description: Error de base de datos }
   /api/rooms/{roomId}/join:
     post:
       tags: [Salas]
@@ -214,17 +220,21 @@ paths:
       responses:
         '201': { description: Usuario unido a la sala }
         '401': { description: No autorizado }
+        '403': { description: Perfil incompleto }
         '404': { description: Sala no encontrada }
+        '503': { description: Error de base de datos }
   /api/rooms/{roomId}/members:
     get:
       tags: [Salas]
-      summary: Listar miembros de una sala
+      summary: Listar miembros registrados de una sala
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: roomId, required: true, schema: { type: string } }
       responses:
-        '200': { description: Miembros de la sala }
-        '404': { description: Sala no encontrada }
+        '200': { description: Miembros de la sala, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/RoomMember' } } } } }
+        '401': { description: No autorizado }
+        '403': { description: Perfil incompleto }
+        '503': { description: Error de base de datos }
   /api/rooms/{roomId}/messages:
     post:
       tags: [Mensajes]
@@ -248,15 +258,19 @@ paths:
         '404': { description: Sala no encontrada }
     get:
       tags: [Mensajes]
-      summary: Obtener historial de mensajes de una sala
+      summary: Obtener una página del historial en orden cronológico
+      description: Devuelve los mensajes del más antiguo al más reciente. before acepta el ID de un mensaje, un timestamp ISO 8601 o un timestamp Unix en segundos/milisegundos; se devuelven mensajes anteriores al cursor. El límite predeterminado es 50 y el máximo 100.
       security: [{ bearerAuth: [] }]
       parameters:
         - { in: path, name: roomId, required: true, schema: { type: string } }
-        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { in: query, name: limit, required: false, description: Número de mensajes a devolver (predeterminado 50), schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { in: query, name: before, required: false, description: ID de mensaje o timestamp ISO 8601/Unix para solicitar mensajes anteriores, schema: { type: string, example: '2026-11-25T15:00:00.000Z' } }
       responses:
         '200': { description: Historial de mensajes, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Message' } } } } }
         '401': { description: No autorizado }
         '404': { description: Sala no encontrada }
+        '400': { description: Cursor de paginación inválido }
+        '503': { description: Error de base de datos }
 components:
   securitySchemes:
     bearerAuth:
@@ -291,6 +305,17 @@ components:
           properties:
             _seconds: { type: integer, format: int64 }
             _nanoseconds: { type: integer }
+    RoomMember:
+      type: object
+      properties:
+        roomId: { type: string }
+        uid: { type: string }
+        joinedAt:
+          type: object
+          nullable: true
+          properties:
+            _seconds: { type: integer, format: int64 }
+            _nanoseconds: { type: integer }
     Message:
       type: object
       properties:
@@ -299,7 +324,7 @@ components:
         autorId: { type: string }
         autorNombre: { type: string }
         texto: { type: string }
-        createdAt: { type: string }
+        createdAt: { type: string, format: date-time }
     Error:
       type: object
       properties:
