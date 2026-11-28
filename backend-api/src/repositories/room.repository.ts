@@ -26,7 +26,7 @@ function toRoom(doc: DocumentSnapshot<DocumentData>): Room {
 
 function toMember(doc: DocumentSnapshot<DocumentData>): RoomMember {
   const data = doc.data() as DocumentData;
-  return { roomId: data.roomId, uid: data.uid, joinedAt: data.joinedAt };
+  return { roomId: data.roomId, uid: data.uid, joinedAt: data.joinedAt, silenciado: data.silenciado ?? false };
 }
 
 function toMessage(doc: DocumentSnapshot<DocumentData>): Message {
@@ -165,8 +165,8 @@ export async function addMember(roomId: string, uid: string): Promise<RoomMember
     const snap = await ref.get();
     if (snap.exists) return toMember(snap);
 
-    await ref.set({ roomId, uid, joinedAt: FieldValue.serverTimestamp() });
-    return { roomId, uid, joinedAt: null };
+    await ref.set({ roomId, uid, joinedAt: FieldValue.serverTimestamp(), silenciado: false });
+    return { roomId, uid, joinedAt: null, silenciado: false };
   });
 }
 
@@ -224,6 +224,17 @@ export async function listMessages(roomId: string, limit = 50, before?: string):
 export async function removeMember(roomId: string, uid: string): Promise<void> {
   return guard(async () => {
     await db.collection(ROOMS).doc(roomId).collection('members').doc(uid).delete();
+  });
+}
+
+export async function toggleSilenciar(roomId: string, uid: string, silenciado: boolean): Promise<RoomMember> {
+  return guard(async () => {
+    const ref = db.collection(ROOMS).doc(roomId).collection('members').doc(uid);
+    const snap = await ref.get();
+    if (!snap.exists) throw new AppError('Miembro no encontrado', 404, { code: 'MEMBER_NOT_FOUND' });
+    await ref.update({ silenciado });
+    const actualizado = await ref.get();
+    return toMember(actualizado);
   });
 }
 

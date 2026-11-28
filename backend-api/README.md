@@ -77,7 +77,30 @@ service cloud.firestore {
 #### 3. Salida del usuario
 
 - **Salir de sala**: Limpia `rooms/{roomId}/members/{uid}`
-- **Borrar cuenta** (`DELETE /api/users/me`): Borra perfil, libera username, borra mensajes propios y salas donde es anfitrión (política sin datos huérfanos)
+
+#### 4. Eliminación de cuenta (`DELETE /api/users/me`)
+
+El endpoint elimina la cuenta del usuario y todos sus datos asociados en Firestore y Firebase Authentication, siguiendo una política de **"no dejar datos huérfanos"**. El orden de ejecución es seguro: primero se limpian los datos asociados y finalmente se borra la cuenta de Auth, permitiendo reintentos si el proceso falla a mitad.
+
+**Orden de eliminación:**
+
+1. **Mensajes del usuario** — Se borran todos los documentos en `rooms/{roomId}/messages/{msgId}` donde `autorId == uid` (consulta por colección grupo). Esto incluye mensajes en salas donde el usuario era anfitrión y en salas donde era miembro.
+2. **Membresías** — Se itera por todas las salas en Firestore y se borra el documento `rooms/{roomId}/members/{uid}` para cada una. El usuario deja de aparecer como participante en cualquier sala.
+3. **Salas donde es anfitrión** — Se buscan todas las salas donde `anfitriónId == uid`. Para cada una:
+   - Se borran todos los documentos de `rooms/{roomId}/members/*` (todos los miembros quedan expulsados).
+   - Se borran todos los documentos de `rooms/{roomId}/messages/*` (todos los mensajes de esa sala se eliminan).
+   - Se borra el documento `rooms/{roomId}`.
+4. **Username** — Se borra la entrada en `usernames/{usernameLower}`, liberando el nombre de usuario para que otro usuario pueda registrarlo.
+5. **Perfil** — Se borra el documento `users/{uid}` en Firestore.
+6. **Firebase Auth** — Se elimina la cuenta con `auth.deleteUser(uid)`. Si el usuario ya no existe en Auth (error `user-not-found`), la operación continúa sin error, permitiendo reintentos seguros.
+
+**Resultados esperados tras la eliminación:**
+- No quedan mensajes con `autorId == uid`.
+- No hay salas donde `anfitriónId == uid`.
+- No hay membresías `rooms/*/members/{uid}`.
+- No hay entrada `usernames/{usernameLower}` con `uid == uid`.
+- No existe `users/{uid}`.
+- No existe la cuenta en Firebase Auth.
 
 ### Endpoints API relevantes (documentados en swagger.yaml)
 

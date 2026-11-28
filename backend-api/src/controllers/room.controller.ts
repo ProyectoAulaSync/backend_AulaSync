@@ -52,3 +52,18 @@ export const listMembers = async (req: Request, res: Response): Promise<void> =>
   const members = await roomService.listRoomMembersService(roomId);
   res.json(members);
 };
+
+export const removeMember = async (req: Request, res: Response): Promise<void> => {
+  const roomId = String(req.params.roomId);
+  const uid = String(req.params.uid);
+  await roomService.removeMemberService(roomId, uid);
+  res.status(204).send();
+};
+
+export const toggleSilenciar = async (req: Request, res: Response): Promise<void> => {
+  const roomId = String(req.params.roomId);
+  const uid = String(req.params.uid);
+  const { silenciado } = req.body as { silenciado: boolean };
+  const miembro = await roomService.toggleSilenciarService(roomId, uid, silenciado);
+  res.json(miembro);
+};

@@ -1,5 +1,5 @@
 import type { RoomCreateInput, RoomUpdateInput } from '../schemas/room.schema';
-import type { Room } from '../types/room';
+import type { Room, RoomMember } from '../types/room';
 import * as roomRepo from '../repositories/room.repository';
 import { profileNotFound } from '../errors/userErrors';
 import { AppError } from '../errors/AppError';
@@ -40,5 +40,13 @@ export async function listRoomMembersService(roomId: string) {
 
 export async function findRoomById(roomId: string): Promise<Room | null> {
   return roomRepo.findRoomById(roomId);
+}
+
+export async function removeMemberService(roomId: string, uid: string): Promise<void> {
+  return roomRepo.removeMember(roomId, uid);
+}
+
+export async function toggleSilenciarService(roomId: string, uid: string, silenciado: boolean): Promise<RoomMember> {
+  return roomRepo.toggleSilenciar(roomId, uid, silenciado);
 }
 
