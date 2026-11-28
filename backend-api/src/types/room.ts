@@ -10,6 +10,7 @@ export interface RoomMember {
   roomId: string;
   uid: string;
   joinedAt: unknown;
+  silenciado?: boolean;
 }
 
 export interface Message {
